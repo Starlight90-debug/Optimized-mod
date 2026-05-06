@@ -1,0 +1,104 @@
+name: Build Multiversion Plugin
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+    branches: [main, master]
+
+jobs:
+  build-windows:
+    name: Build (Windows x64 — LeviLamina BDS target)
+    runs-on: windows-2022
+
+    steps:
+      # ── Checkout ──────────────────────────────────────────────────────────
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      # ── MSVC environment ──────────────────────────────────────────────────
+      - name: Setup MSVC Developer Command Prompt
+        uses: ilammy/msvc-dev-cmd@v1
+        with:
+          arch: x64
+
+      # ── CMake + Ninja ──────────────────────────────────────────────────────
+      - name: Setup CMake & Ninja
+        uses: lukka/get-cmake@latest
+        with:
+          cmakeVersion: "~3.28"
+          ninjaVersion: "~1.11"
+
+      # ── vcpkg for OpenSSL (Protocol dependency) ───────────────────────────
+      - name: Setup vcpkg
+        uses: lukka/run-vcpkg@v11
+        with:
+          vcpkgJsonGlob: '**/vcpkg.json'
+
+      - name: Install OpenSSL via vcpkg
+        run: vcpkg install openssl:x64-windows-static
+        shell: pwsh
+
+      # ── Configure ──────────────────────────────────────────────────────────
+      - name: Configure CMake
+        run: |
+          cmake -S . -B build `
+            -G Ninja `
+            -DCMAKE_BUILD_TYPE=Release `
+            -DCMAKE_TOOLCHAIN_FILE="${env:VCPKG_ROOT}/scripts/buildsystems/vcpkg.cmake" `
+            -DVCPKG_TARGET_TRIPLET=x64-windows-static `
+            -DOPENSSL_USE_STATIC_LIBS=ON
+        shell: pwsh
+
+      # ── Build ──────────────────────────────────────────────────────────────
+      - name: Build plugin
+        run: cmake --build build --config Release --parallel
+        shell: pwsh
+
+      # ── Collect artifacts ──────────────────────────────────────────────────
+      - name: Collect plugin DLL
+        run: |
+          New-Item -ItemType Directory -Force -Path dist
+          Copy-Item build/multiversion-bridge.dll dist/ -ErrorAction SilentlyContinue
+          Copy-Item build/Release/multiversion-bridge.dll dist/ -ErrorAction SilentlyContinue
+        shell: pwsh
+
+      - name: Upload plugin artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: multiversion-bridge-${{ github.sha }}
+          path: dist/multiversion-bridge.dll
+          retention-days: 30
+
+  build-linux:
+    name: Build (Linux x64 — experimental)
+    runs-on: ubuntu-24.04
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update -y
+          sudo apt-get install -y cmake ninja-build libssl-dev gcc-14 g++-14
+          sudo update-alternatives --install /usr/bin/gcc gcc /usr/bin/gcc-14 100
+          sudo update-alternatives --install /usr/bin/g++ g++ /usr/bin/g++-14 100
+
+      - name: Configure CMake
+        run: |
+          cmake -S . -B build \
+            -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_CXX_COMPILER=g++-14
+
+      - name: Build plugin
+        run: cmake --build build --config Release --parallel
+
+      - name: Upload plugin artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: multiversion-bridge-linux-${{ github.sha }}
+          path: build/multiversion-bridge.so
+          retention-days: 30
+          
